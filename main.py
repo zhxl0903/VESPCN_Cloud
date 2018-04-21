@@ -128,11 +128,14 @@ def run_train_epochs(target1, cfg):
     # if_chief: 制定task_index为0的任务为主任务，用于负责变量初始化、做checkpoint、保存summary和复原
     # 定义计算服务器需要运行的操作。在所有的计算服务器中有一个是主计算服务器。
     # 它除了负责计算反向传播的结果，它还负责输出日志和保存模型
+    # save_checkpoint_secs = 300 seconds / save
     with tf.train.MonitoredTrainingSession(checkpoint_dir=FLAGS.checkpoint_dir,
                                            hooks=hooks,
                                            master=target1,
                                            config=cfg,
                                            is_chief=(FLAGS.task_index == 0),
+                                           save_checkpoint_secs=300,
+                                           save_summaries_steps=5
                                            ) as sess:
         while not sess.should_stop():
             espcn.train(FLAGS, sess)

@@ -126,32 +126,45 @@ class ESPCN(object):
             if self.train_mode == 0 or self.train_mode == 1 or \
                 self.train_mode == 3 or self.train_mode == 4 or \
                 self.train_mode == 6:
-                self.pred = self.model()
+                with tf.name_scope('model outputs'):
+                    self.pred = self.model()
             else:
-                self.pred, self.imgPrev, self.imgNext = self.model()
+                with tf.name_scope('model outputs'):
+                    self.pred, self.imgPrev, self.imgNext = self.model()
 
             # Prepares loss function based on training mode
             if self.train_mode == 0:
 
                 # Defines loss function for training a single spatial transformer
-                self.loss = tf.reduce_mean(tf.square(self.labels - self.pred))
+                with tf.name_scope('loss function'):
+                    self.loss = tf.reduce_mean(tf.square(self.labels - self.pred))
             elif self.train_mode == 1 or self.train_mode == 4 or self.train_mode == 6:
 
                 # Defines loss function for training subpixel convnet
-                self.loss = tf.reduce_mean(tf.square(self.labels - self.pred))
+                with tf.name_scope('loss function'):
+                    self.loss = tf.reduce_mean(tf.square(self.labels - self.pred))
                 print('Mode 1/4/6: Mean-Squared Loss Activated')
             elif self.train_mode == 2 or self.train_mode == 5:
 
                 # Defines loss function for training in unison
-                self.loss = tf.reduce_mean(tf.square(self.labels - self.pred)) + \
-                            0.01*tf.reduce_mean(tf.square(self.imgPrev-self.images_prev_curr[:, :, :, 0:self.c_dim])) + \
-                            0.01*tf.reduce_mean(tf.square(self.imgNext - self.images_prev_curr[:, :, :, 0:self.c_dim]))
-        
+                with tf.name_scope('loss function'):
+                    self.loss = tf.reduce_mean(tf.square(self.labels - self.pred)) + \
+                                               0.01*tf.reduce_mean(tf.square(self.imgPrev-self.images_prev_curr[:, :, :, 0:self.c_dim])) + \
+                                               0.01*tf.reduce_mean(tf.square(self.imgNext - self.images_prev_curr[:, :, :, 0:self.c_dim]))
+
+            # Generates summary scalar for cost
+            tf.summary.scalar("cost", self.loss)
         if self.train_mode != 3:
-            global_step = tf.train.get_or_create_global_step()
-            self.global_step = global_step
-            self.train_op = tf.train.AdamOptimizer(learning_rate=self.learn_rate).minimize(self.loss,
-                                                                                           global_step=global_step)
+
+            with tf.name_scope('global_step'):
+                global_step = tf.train.get_or_create_global_step()
+                self.global_step = global_step
+
+            with tf.name_scope('train'):
+                self.train_op = tf.train.AdamOptimizer(learning_rate=self.learn_rate).minimize(self.loss,
+                                                                                               global_step=global_step)
+        # Merges all summaries
+        self.summary_op = tf.summary.merge_all()
         
     '''
     This method constructs spatial transformer given frameSet.
@@ -304,7 +317,7 @@ class ESPCN(object):
     '''
     This method generates a network model given self.train_mode
     train mode = 0: model for 1 spatial transformer
-    train mode = 1: model for single frame ESPSCN 
+    train mode = 1: model for single frame ESPCN 
     train mode = 2: model for VESPCN with 2 spatial transformers taking 2 
                     images each
     
@@ -319,19 +332,26 @@ class ESPCN(object):
            
         # Initializes spatial transformer if training mode is 0 or 2
         if self.train_mode == 2 or self.train_mode == 5:
-            imgPrev = self.spatial_transformer(self.images_prev_curr,
-                                               reuse=False)
-            imgNext = self.spatial_transformer(self.images_next_curr,
-                                               reuse=True)
-               
-            targetImg = self.images_prev_curr[:, :, :, 0:self.c_dim]
-            imgSet = tf.concat([imgPrev, targetImg, imgNext], 3)
+
+            with tf.name_scope('Previous-Image MC'):
+                imgPrev = self.spatial_transformer(self.images_prev_curr,
+                                                   reuse=False)
+            with tf.name_scope('Next-Image MC'):
+                imgNext = self.spatial_transformer(self.images_next_curr,
+                                                   reuse=True)
+            with tf.name_scope('Target-Image'):
+                targetImg = self.images_prev_curr[:, :, :, 0:self.c_dim]
+            with tf.name_scope('Stacked Input'):
+                imgSet = tf.concat([imgPrev, targetImg, imgNext], 3)
         elif self.train_mode == 0:
-            motionCompensatedImgOut = self.spatial_transformer(self.
-                                                               images_curr_prev,
-                                                               reuse=False)
+
+            with tf.name_scope('Spatial Transformer'):
+                motionCompensatedImgOut = self.spatial_transformer(self.
+                                                                   images_curr_prev,
+                                                                   reuse=False)
         else:
-            imgSet = self.images_in
+            with tf.name_scope('Image Input'):
+                imgSet = self.images_in
 
         # wInitializer1 = tf.random_normal_initializer(stddev=np.sqrt(2.0/25/3))
         # wInitializer2 = tf.random_normal_initializer(stddev=np.sqrt(2.0/9/64))
@@ -347,22 +367,25 @@ class ESPCN(object):
             # Connects early fusion network with spatial transformer
             # and subpixel convnet. For collapsing to temporal depth of 1,
             # number of channels produced is 24 by VESPCN paper
-            EarlyFusion = tf.layers.conv2d(imgSet,  24, 3, padding='same',
-                                           activation=tf.nn.relu,
-                                           kernel_initializer=wInitializer1,
-                                           bias_initializer=biasInitializer,
-                                           name='EF1')
 
-            subPixelIn = EarlyFusion
+            with tf.name_scope('Early Fusion Layer'):
+                EarlyFusion = tf.layers.conv2d(imgSet,  24, 3, padding='same',
+                                               activation=tf.nn.relu,
+                                               kernel_initializer=wInitializer1,
+                                               bias_initializer=biasInitializer,
+                                               name='EF1')
+
+                subPixelIn = EarlyFusion
        
         elif self.train_mode == 1 or self.train_mode == 6:
-           
-            # Connects subpixel convnet to placeholder for feeding single images
-            subPixelIn = tf.layers.conv2d(imgSet,  24, 3, padding='same',
-                                          activation=tf.nn.relu,
-                                          kernel_initializer=wInitializer1,
-                                          bias_initializer=biasInitializer,
-                                          name='subPixelIn')
+
+            with tf.name_scope('ESPCN in'):
+                # Connects subpixel convnet to placeholder for feeding single images
+                subPixelIn = tf.layers.conv2d(imgSet,  24, 3, padding='same',
+                                              activation=tf.nn.relu,
+                                              kernel_initializer=wInitializer1,
+                                              bias_initializer=biasInitializer,
+                                              name='subPixelIn')
         elif self.train_mode == 3:
            
             # Sets height and width for resizing based on is_train
@@ -376,10 +399,10 @@ class ESPCN(object):
                 # Sets to image size
                 height = self.h
                 width = self.w
-               
-            biCubic = tf.image.resize_images(imgSet, [height*self.scale,
-                                             width*self.scale],
-                                             method=tf.image.ResizeMethod.BICUBIC)
+            with tf.name_scope('Bicubic Upscaling'):
+                biCubic = tf.image.resize_images(imgSet, [height*self.scale,
+                                                 width*self.scale],
+                                                 method=tf.image.ResizeMethod.BICUBIC)
     
         # TO DO: Enable all layers in every step but
         # adjust inputs and outputs to layers depending on
@@ -387,81 +410,84 @@ class ESPCN(object):
         # Builds subpixel net if train mode is 1 or 2
         if self.train_mode == 1 or self.train_mode == 2 or self.train_mode == 5 \
            or self.train_mode == 6:
-           
-            conv1 = tf.layers.conv2d(subPixelIn,  24, 3, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer1,
-                                     bias_initializer=biasInitializer,
-                                     name='subPixelL1')
-            conv2 = tf.layers.conv2d(conv1,  24, 3, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer1,
-                                     bias_initializer=biasInitializer,
-                                     name='subPixelL2')
-            conv3 = tf.layers.conv2d(conv2,  24, 3, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer1,
-                                     bias_initializer=biasInitializer,
-                                     name='subPixelL3')
-            conv4 = tf.layers.conv2d(conv3,  24, 3, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer1,
-                                     bias_initializer=biasInitializer,
-                                     name='subPixelL4')
-            conv5 = tf.layers.conv2d(conv4,  24, 3, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer2,
-                                     bias_initializer=biasInitializer,
-                                     name='subPixelL5')
-            conv6 = tf.layers.conv2d(conv5,  24, 3, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer2,
-                                     bias_initializer=biasInitializer,
-                                     name='subPixelL6')
-            conv7 = tf.layers.conv2d(conv6,  24, 3, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer2,
-                                     bias_initializer=biasInitializer,
-                                     name='subPixelL7')
-           
-            conv8 = tf.layers.conv2d(conv7,
-                                     self.c_dim * self.scale * self.scale,
-                                     3, padding='same', activation=None,
-                                     kernel_initializer=wInitializer3,
-                                     bias_initializer=biasInitializer,
-                                     name='subPixelL8')
+            with tf.name_scope('ESPCN'):
+                conv1 = tf.layers.conv2d(subPixelIn,  24, 3, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer1,
+                                         bias_initializer=biasInitializer,
+                                         name='subPixelL1')
+                conv2 = tf.layers.conv2d(conv1,  24, 3, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer1,
+                                         bias_initializer=biasInitializer,
+                                         name='subPixelL2')
+                conv3 = tf.layers.conv2d(conv2,  24, 3, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer1,
+                                         bias_initializer=biasInitializer,
+                                         name='subPixelL3')
+                conv4 = tf.layers.conv2d(conv3,  24, 3, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer1,
+                                         bias_initializer=biasInitializer,
+                                         name='subPixelL4')
+                conv5 = tf.layers.conv2d(conv4,  24, 3, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer2,
+                                         bias_initializer=biasInitializer,
+                                         name='subPixelL5')
+                conv6 = tf.layers.conv2d(conv5,  24, 3, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer2,
+                                         bias_initializer=biasInitializer,
+                                         name='subPixelL6')
+                conv7 = tf.layers.conv2d(conv6,  24, 3, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer2,
+                                         bias_initializer=biasInitializer,
+                                         name='subPixelL7')
 
-            ps = self.PS(conv8, self.scale)
+                conv8 = tf.layers.conv2d(conv7,
+                                         self.c_dim * self.scale * self.scale,
+                                         3, padding='same', activation=None,
+                                         kernel_initializer=wInitializer3,
+                                         bias_initializer=biasInitializer,
+                                         name='subPixelL8')
+
+                ps = self.PS(conv8, self.scale)
         elif self.train_mode == 4:
-           
-            # Builds SRCNN network if train_mode is 4
-            conv1 = tf.layers.conv2d(imgSet,  64, 9, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer1,
-                                     bias_initializer=biasInitializer,
-                                     name='SRCNN1')
-            conv2 = tf.layers.conv2d(conv1,  32, 1, padding='same',
-                                     activation=tf.nn.relu,
-                                     kernel_initializer=wInitializer1,
-                                     bias_initializer=biasInitializer,
-                                     name='SRCNN2')
-            conv3 = tf.layers.conv2d(conv2,  self.c_dim, 5, padding='same',
-                                     activation=None,
-                                     kernel_initializer=wInitializer1,
-                                     bias_initializer=biasInitializer,
-                                     name='SRCNN3')
+
+            with tf.name_scope('SRCNN'):
+                # Builds SRCNN network if train_mode is 4
+                conv1 = tf.layers.conv2d(imgSet,  64, 9, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer1,
+                                         bias_initializer=biasInitializer,
+                                         name='SRCNN1')
+                conv2 = tf.layers.conv2d(conv1,  32, 1, padding='same',
+                                         activation=tf.nn.relu,
+                                         kernel_initializer=wInitializer1,
+                                         bias_initializer=biasInitializer,
+                                         name='SRCNN2')
+                conv3 = tf.layers.conv2d(conv2,  self.c_dim, 5, padding='same',
+                                         activation=None,
+                                         kernel_initializer=wInitializer1,
+                                         bias_initializer=biasInitializer,
+                                         name='SRCNN3')
 
         # Returns network output given self.train_mode
-        if self.train_mode == 0:
-            return motionCompensatedImgOut
-        elif self.train_mode == 1 or self.train_mode == 6:
-            return tf.nn.tanh(ps)
-        elif self.train_mode == 3:
-            return (biCubic)
-        elif self.train_mode == 4:
-            return conv3
-        else:
-            return tf.nn.tanh(ps), imgPrev, imgNext
+
+        with tf.name_scope('Output(s)'):
+            if self.train_mode == 0:
+                return motionCompensatedImgOut
+            elif self.train_mode == 1 or self.train_mode == 6:
+                return tf.nn.tanh(ps)
+            elif self.train_mode == 3:
+                return (biCubic)
+            elif self.train_mode == 4:
+                return conv3
+            else:
+                return tf.nn.tanh(ps), imgPrev, imgNext
 
     '''
     This method serves as a helper method for PS ad PS2 in the case of 

@@ -22,7 +22,7 @@ from utils import (
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 
-flags.DEFINE_integer("epoch", 1200, "Number of epoch")
+flags.DEFINE_integer("epoch", 10000, "Number of epoch")
 flags.DEFINE_integer("steps_per_epoch", 3000, "Steps per epoch")
 flags.DEFINE_integer("image_size", 32, "The size of image input")
 flags.DEFINE_integer("c_dim", 3, "The size of channel")
@@ -135,7 +135,7 @@ def run_train_epochs(target1, cfg):
                                            config=cfg,
                                            is_chief=(FLAGS.task_index == 0),
                                            save_checkpoint_secs=300,
-                                           save_summaries_steps=5
+                                           save_summaries_steps=100
                                            ) as sess:
         while not sess.should_stop():
             espcn.train(FLAGS, sess)
